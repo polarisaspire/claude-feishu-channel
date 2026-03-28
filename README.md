@@ -40,7 +40,8 @@ bun setup.ts
 ```
 
 `setup.ts` 会自动：
-- 将 skills 复制到 `~/.claude/skills/`（安装 `/feishu-access` 和 `/feishu-configure` 命令）
+- 安装**飞书官方 lark-cli skills**（`/lark-im`、`/lark-doc`、`/lark-base` 等，命令列表随官方更新）
+- 将本插件 skills 复制到 `~/.claude/skills/`（安装 `/feishu-access` 和 `/feishu-configure` 命令）
 - 输出根据当前路径生成的 MCP 配置
 
 ### 3. 注册 MCP server
@@ -94,6 +95,12 @@ skills 安装位置：`~/.claude/skills/feishu-access/` 和 `~/.claude/skills/fe
 | `/feishu-access policy pairing\|allowlist\|disabled` | 修改 DM 策略 |
 | `/feishu-access list` | 查看当前配置 |
 | `/feishu-access remove <open_id>` | 移除用户 |
+
+`bun setup.ts` 同时会安装[飞书官方 lark-cli skills](https://github.com/larksuite/cli)，含 `/lark-im`（收发消息）、`/lark-doc`（云文档）、`/lark-base`（多维表格）、`/lark-calendar`（日历）等命令，无需单独安装。可运行以下命令查看当前可用命令列表：
+
+```bash
+npx skills list -g
+```
 
 ## 群聊支持
 
