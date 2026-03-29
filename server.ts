@@ -324,14 +324,15 @@ const PERMISSION_RE = /^\s*(y(?:es)?|n(?:o)?)\s+([a-km-z]{5})\s*$/i
 // Processing state: tracks which users Claude is currently handling
 // openId → { chatId, timeoutHandle }
 // Cleared when Claude calls reply/edit_message, or after PROCESSING_TTL as fallback
-const PROCESSING_TTL = 3 * 60_000 // 3-minute fallback timeout
-const processingUsers = new Map<string, { chatId: string; timer: ReturnType<typeof setTimeout> }>()
+const PROCESSING_TTL = 90_000 // 90-second fallback timeout
+const processingUsers = new Map<string, { chatId: string; text: string; timer: ReturnType<typeof setTimeout> }>()
 
-function setProcessing(openId: string, chatId: string) {
+function setProcessing(openId: string, chatId: string, text: string) {
   const existing = processingUsers.get(openId)
   if (existing) clearTimeout(existing.timer)
   processingUsers.set(openId, {
     chatId,
+    text,
     timer: setTimeout(() => {
       processingUsers.delete(openId)
       log(`⏰ TTL expired for ${openId}, notifying user`)
@@ -425,20 +426,39 @@ async function handleInbound(
 
   // Busy check: if Claude is still handling a previous message from this user, notify them
   if (processingUsers.has(openId)) {
-    log(`⏳ busy: ${openId}, dropping message`)
-    feishu.im.message.create({
-      params: { receive_id_type: 'chat_id' },
-      data: {
-        receive_id: chatId,
-        msg_type: 'text',
-        content: JSON.stringify({ text: '⏳ 正在处理中，请稍候…' }),
-      },
-    }).catch(() => { /* ignore */ })
-    return
+    const entry = processingUsers.get(openId)!
+
+    // Cancel keyword: user explicitly aborts
+    if (/^(取消|cancel)$/i.test(text)) {
+      clearProcessing(chatId)
+      feishu.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text: '已取消，请重新发送消息。' }) },
+      }).catch(() => { /* ignore */ })
+      return
+    }
+
+    // Same content = retry intent → clear and re-forward to Claude
+    if (entry.text === text) {
+      log(`↩ retry detected for ${openId}, re-forwarding`)
+      clearProcessing(chatId)
+      // fall through to normal processing
+    } else {
+      log(`⏳ busy: ${openId}, dropping message`)
+      feishu.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'text',
+          content: JSON.stringify({ text: '⏳ 正在处理中，请稍候…\n发送「取消」可中断。' }),
+        },
+      }).catch(() => { /* ignore */ })
+      return
+    }
   }
 
   // Mark user as processing (cleared when Claude calls reply, or after TTL)
-  setProcessing(openId, chatId)
+  setProcessing(openId, chatId, text)
 
   // Ack reaction (fire-and-forget)
   if (access.ackReaction) {
