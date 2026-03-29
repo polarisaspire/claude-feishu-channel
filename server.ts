@@ -165,19 +165,19 @@ const mcp = new Server(
   },
 )
 
-// ─── Message → Chat mapping (for edit_message to resolve chatId) ─────────────
+// ─── Message → Chat mappings ──────────────────────────────────────────────────
 
-// Tracks bot-sent message_id → chat_id so edit_message can clearProcessing
-// Capped at 200 entries to avoid unbounded growth
-const msgChatMap = new Map<string, string>()
-const MSG_CHAT_MAP_MAX = 200
+const MSG_MAP_MAX = 200
 
-function trackMsgChat(messageId: string, chatId: string) {
-  if (msgChatMap.size >= MSG_CHAT_MAP_MAX) {
-    // Evict oldest entry
-    msgChatMap.delete(msgChatMap.keys().next().value!)
-  }
-  msgChatMap.set(messageId, chatId)
+// Bot-sent message_id → chat_id (for edit_message to clearProcessing)
+const outboundMsgChatMap = new Map<string, string>()
+
+// Inbound message_id → chat_id (for react to clearProcessing)
+const inboundMsgChatMap = new Map<string, string>()
+
+function trackMsgChat(map: Map<string, string>, messageId: string, chatId: string) {
+  if (map.size >= MSG_MAP_MAX) map.delete(map.keys().next().value!)
+  map.set(messageId, chatId)
 }
 
 // ─── Tool handlers ───────────────────────────────────────────────────────────
@@ -249,7 +249,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         })
         if (resp.data?.message_id) {
           ids.push(resp.data.message_id)
-          trackMsgChat(resp.data.message_id, chat_id)
+          trackMsgChat(outboundMsgChatMap, resp.data.message_id, chat_id)
         }
       }
       // Clear after API calls complete so the next inbound notification
@@ -264,6 +264,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         path: { message_id },
         data: { reaction_type: { emoji_type: emoji } },
       })
+      // If reacting to an inbound message (user msg), clear processing state
+      const chatId = inboundMsgChatMap.get(message_id)
+      if (chatId) clearProcessing(chatId)
       return { content: [{ type: 'text', text: 'reacted' }] }
     }
 
@@ -275,7 +278,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         data: { msg_type: 'interactive', content: JSON.stringify(buildCard(text)) },
       } as any)
       // Resolve chatId from the message we sent, then clear processing state
-      const chatId = msgChatMap.get(message_id)
+      const chatId = outboundMsgChatMap.get(message_id)
       if (chatId) clearProcessing(chatId)
       return { content: [{ type: 'text', text: 'edited' }] }
     }
@@ -444,6 +447,9 @@ async function handleInbound(
       data: { reaction_type: { emoji_type: access.ackReaction } },
     }).catch(() => { /* ignore */ })
   }
+
+  // Track inbound msgId so react can resolve chatId for clearProcessing
+  trackMsgChat(inboundMsgChatMap, msgId, chatId)
 
   // Forward to Claude Code
   log(`→ notify claude: ${openId} busy=${processingUsers.size} text="${text.slice(0, 60)}"`)
