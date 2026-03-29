@@ -165,6 +165,21 @@ const mcp = new Server(
   },
 )
 
+// ─── Message → Chat mapping (for edit_message to resolve chatId) ─────────────
+
+// Tracks bot-sent message_id → chat_id so edit_message can clearProcessing
+// Capped at 200 entries to avoid unbounded growth
+const msgChatMap = new Map<string, string>()
+const MSG_CHAT_MAP_MAX = 200
+
+function trackMsgChat(messageId: string, chatId: string) {
+  if (msgChatMap.size >= MSG_CHAT_MAP_MAX) {
+    // Evict oldest entry
+    msgChatMap.delete(msgChatMap.keys().next().value!)
+  }
+  msgChatMap.set(messageId, chatId)
+}
+
 // ─── Tool handlers ───────────────────────────────────────────────────────────
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -232,7 +247,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           params: { receive_id_type: 'chat_id' },
           data: body as any,
         })
-        if (resp.data?.message_id) ids.push(resp.data.message_id)
+        if (resp.data?.message_id) {
+          ids.push(resp.data.message_id)
+          trackMsgChat(resp.data.message_id, chat_id)
+        }
       }
       // Clear after API calls complete so the next inbound notification
       // isn't forwarded to Claude while it's still processing this tool call
@@ -252,11 +270,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'edit_message': {
       const { message_id, text } = req.params.arguments as { message_id: string; text: string }
       // Note: Feishu only allows editing bot-sent messages within a time window
-      // edit_message doesn't carry chat_id, so we can't clearProcessing here — rely on TTL
       await feishu.im.message.patch({
         path: { message_id },
         data: { msg_type: 'interactive', content: JSON.stringify(buildCard(text)) },
       } as any)
+      // Resolve chatId from the message we sent, then clear processing state
+      const chatId = msgChatMap.get(message_id)
+      if (chatId) clearProcessing(chatId)
       return { content: [{ type: 'text', text: 'edited' }] }
     }
 
