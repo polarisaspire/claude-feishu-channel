@@ -329,7 +329,18 @@ function setProcessing(openId: string, chatId: string) {
   if (existing) clearTimeout(existing.timer)
   processingUsers.set(openId, {
     chatId,
-    timer: setTimeout(() => processingUsers.delete(openId), PROCESSING_TTL),
+    timer: setTimeout(() => {
+      processingUsers.delete(openId)
+      log(`⏰ TTL expired for ${openId}, notifying user`)
+      feishu.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'text',
+          content: JSON.stringify({ text: '⏰ 处理超时，请重新发送消息。' }),
+        },
+      }).catch(() => { /* ignore */ })
+    }, PROCESSING_TTL),
   })
 }
 
