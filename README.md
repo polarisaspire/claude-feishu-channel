@@ -46,7 +46,7 @@ bun setup.ts
 
 ### 3. 注册 MCP server
 
-将 `setup.ts` 输出的配置加入 `~/.claude.json`（全局）：
+在**启动 Claude Code 所在的项目目录**下创建 `.mcp.json`：
 
 ```json
 {
@@ -60,6 +60,8 @@ bun setup.ts
 ```
 
 > 路径以 `setup.ts` 的实际输出为准，不要手动填写。
+
+> **注意**：`--dangerously-load-development-channels` 只会从**当前项目目录的 `.mcp.json`** 中查找 channel server，全局的 `~/.claude/mcp.json` 不会被识别。因此建议固定从同一个目录启动 Claude Code（例如本插件所在目录），或在每个需要使用飞书 channel 的项目目录下都放一份 `.mcp.json`。
 
 ### 4. 配置凭证
 
