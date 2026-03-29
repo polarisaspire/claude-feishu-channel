@@ -149,10 +149,8 @@ const mcp = new Server(
       'Always reply with the reply tool using the chat_id from the tag. ' +
       'Use react to acknowledge (emoji: THUMBSUP OK CLAP LOVE THINKING WAVE). ' +
       'Use edit_message to update a prior reply (pass its message_id). ' +
-      'Do NOT send replies unless the user message is a question or requires clarification. ' +
-      'When executing tasks (sending messages, managing files, etc.), do NOT send any confirmation back — just execute silently. ' +
-      'Only use react (THUMBSUP) to acknowledge task completion. ' +
-      'After calling the reply tool, do NOT send any follow-up confirmation or summary — the tool result speaks for itself.',
+      'Always reply with results when a task produces output (e.g. query results, status info). ' +
+      'When the task is a pure action with no meaningful result (e.g. sending a message, adding a reaction), do NOT send a follow-up confirmation like "已发送" or "完成" — the action speaks for itself.',
   },
 )
 
@@ -393,6 +391,7 @@ wsClient.start({
         const msgType  = msg?.message_type ?? msg?.msg_type ?? ''
 
         if (!openId || !chatId || !msgId) return
+if (sender?.sender_type === 'app') return // ignore bot's own messages
         if (msgType !== 'text') return // only handle text for now
 
         let text = ''
