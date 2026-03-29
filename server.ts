@@ -25,6 +25,17 @@ import * as crypto from 'node:crypto'
 const STATE_DIR   = process.env.FEISHU_STATE_DIR ?? path.join(os.homedir(), '.claude', 'channels', 'feishu')
 const ENV_FILE    = path.join(STATE_DIR, '.env')
 const ACCESS_FILE = path.join(STATE_DIR, 'access.json')
+const LOG_FILE    = path.join(STATE_DIR, 'channel.log')
+
+function log(msg: string) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  process.stderr.write(line)
+  try { fs.appendFileSync(LOG_FILE, line) } catch (e) {
+    process.stderr.write(`[log-write-failed] ${e}\n`)
+  }
+}
+
+log('=== server.ts starting ===')
 
 loadDotEnv()
 
@@ -212,8 +223,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       for (let i = 0; i < chunks.length; i++) {
         const body: Record<string, unknown> = {
           receive_id: chat_id,
-          msg_type: 'text',
-          content: JSON.stringify({ text: chunks[i] }),
+          msg_type: 'interactive',
+          content: JSON.stringify(buildCard(chunks[i])),
         }
         // Thread reply: only on the first chunk, and only if reply_to is given
         if (i === 0 && reply_to) body.reply_in_thread = true
@@ -223,6 +234,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         })
         if (resp.data?.message_id) ids.push(resp.data.message_id)
       }
+      // Clear after API calls complete so the next inbound notification
+      // isn't forwarded to Claude while it's still processing this tool call
+      clearProcessing(chat_id)
       return { content: [{ type: 'text', text: `sent: ${ids.join(', ')}` }] }
     }
 
@@ -238,9 +252,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     case 'edit_message': {
       const { message_id, text } = req.params.arguments as { message_id: string; text: string }
       // Note: Feishu only allows editing bot-sent messages within a time window
+      // edit_message doesn't carry chat_id, so we can't clearProcessing here — rely on TTL
       await feishu.im.message.patch({
         path: { message_id },
-        data: { msg_type: 'text', content: JSON.stringify({ text }) },
+        data: { msg_type: 'interactive', content: JSON.stringify(buildCard(text)) },
       } as any)
       return { content: [{ type: 'text', text: 'edited' }] }
     }
@@ -282,6 +297,32 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 
 // Matches permission verdicts: "yes abcde" / "no abcde" (5 lowercase letters, no 'l')
 const PERMISSION_RE = /^\s*(y(?:es)?|n(?:o)?)\s+([a-km-z]{5})\s*$/i
+
+// Processing state: tracks which users Claude is currently handling
+// openId → { chatId, timeoutHandle }
+// Cleared when Claude calls reply/edit_message, or after PROCESSING_TTL as fallback
+const PROCESSING_TTL = 3 * 60_000 // 3-minute fallback timeout
+const processingUsers = new Map<string, { chatId: string; timer: ReturnType<typeof setTimeout> }>()
+
+function setProcessing(openId: string, chatId: string) {
+  const existing = processingUsers.get(openId)
+  if (existing) clearTimeout(existing.timer)
+  processingUsers.set(openId, {
+    chatId,
+    timer: setTimeout(() => processingUsers.delete(openId), PROCESSING_TTL),
+  })
+}
+
+function clearProcessing(chatId: string) {
+  for (const [openId, entry] of processingUsers) {
+    if (entry.chatId === chatId) {
+      clearTimeout(entry.timer)
+      processingUsers.delete(openId)
+      log(`✓ clearProcessing: ${openId}`)
+      break
+    }
+  }
+}
 
 async function handleInbound(
   openId:   string,
@@ -348,6 +389,23 @@ async function handleInbound(
     if (!isGroupAllowed(openId, chatId)) return
   }
 
+  // Busy check: if Claude is still handling a previous message from this user, notify them
+  if (processingUsers.has(openId)) {
+    log(`⏳ busy: ${openId}, dropping message`)
+    feishu.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: chatId,
+        msg_type: 'text',
+        content: JSON.stringify({ text: '⏳ 正在处理中，请稍候…' }),
+      },
+    }).catch(() => { /* ignore */ })
+    return
+  }
+
+  // Mark user as processing (cleared when Claude calls reply, or after TTL)
+  setProcessing(openId, chatId)
+
   // Ack reaction (fire-and-forget)
   if (access.ackReaction) {
     feishu.im.messageReaction.create({
@@ -357,13 +415,19 @@ async function handleInbound(
   }
 
   // Forward to Claude Code
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      content: text,
-      meta: { chat_id: chatId, open_id: openId, message_id: msgId, chat_type: chatType },
-    },
-  })
+  log(`→ notify claude: ${openId} busy=${processingUsers.size} text="${text.slice(0, 60)}"`)
+  try {
+    await mcp.notification({
+      method: 'notifications/claude/channel',
+      params: {
+        content: text,
+        meta: { chat_id: chatId, open_id: openId, message_id: msgId, chat_type: chatType },
+      },
+    })
+    log('✓ notify sent ok')
+  } catch (err) {
+    log(`✗ notify failed: ${err}`)
+  }
 }
 
 // ─── Start ───────────────────────────────────────────────────────────────────
@@ -390,8 +454,10 @@ wsClient.start({
         const msgId    = (msg?.message_id ?? '').trim()
         const msgType  = msg?.message_type ?? msg?.msg_type ?? ''
 
+        log(`raw: msgId=${msgId} sender_type=${sender?.sender_type} msgType=${msgType} openId=${openId}`)
+
         if (!openId || !chatId || !msgId) return
-if (sender?.sender_type === 'app') return // ignore bot's own messages
+        if (sender?.sender_type === 'app') return // ignore bot's own messages
         if (msgType !== 'text') return // only handle text for now
 
         let text = ''
@@ -401,15 +467,29 @@ if (sender?.sender_type === 'app') return // ignore bot's own messages
         text = text.replace(/@[^\s\u200b]+/g, '').trim()
         if (!text) return
 
+        log(`← inbound: ${openId} "${text.slice(0, 60)}"`)
         await handleInbound(openId, chatId, chatType, msgId, text)
       } catch (err) {
-        process.stderr.write(`[feishu-channel] error: ${err}\n`)
+        log(`✗ inbound error: ${err}`)
       }
     },
   }),
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Wrap markdown text in a Feishu interactive card so lark_md renders it properly */
+function buildCard(content: string): object {
+  return {
+    config: { wide_screen_mode: true },
+    elements: [
+      {
+        tag: 'div',
+        text: { tag: 'lark_md', content },
+      },
+    ],
+  }
+}
 
 function chunkText(text: string, limit: number): string[] {
   if (text.length <= limit) return [text]
