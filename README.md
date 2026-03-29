@@ -5,11 +5,13 @@
 ## 功能
 
 - 📨 接收飞书 DM / 群消息，转发给 Claude Code
-- 💬 Claude 通过 `reply` 工具回复飞书
+- 💬 Claude 通过 `reply` 工具回复飞书（Markdown 渲染，自动分块）
 - 👍 支持 emoji 表情回应（`react` 工具）
 - ✏️ 支持编辑已发送消息（`edit_message` 工具）
 - 🔐 配对机制（pairing code）控制访问权限
 - ⚡ 权限中继：在飞书中远程审批 Claude 的工具调用
+- ⏳ 并发保护：Claude 处理中时新消息会收到"处理中"提示
+- ⏰ 超时通知：Claude 未响应超过 3 分钟自动告知用户重新发送
 
 ## 前置条件
 
@@ -134,6 +136,7 @@ no abcde     ← 拒绝
 |------|------|
 | `~/.claude/channels/feishu/.env` | App ID 和 App Secret |
 | `~/.claude/channels/feishu/access.json` | 访问控制配置 |
+| `~/.claude/channels/feishu/channel.log` | 运行日志（同时输出到 stderr） |
 
 ## 环境变量
 
