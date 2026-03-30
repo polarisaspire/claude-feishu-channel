@@ -4,9 +4,13 @@
  * 用法：bun setup.ts
  *
  * 自动完成：
- *   1. 安装飞书官方 lark-cli skills（npx skills add larksuite/cli）
- *   2. 将本插件 skills 复制到 ~/.claude/skills/
- *   3. 输出根据当前目录生成的 MCP 配置
+ *   1. 安装飞书官方 lark-cli（npm install -g @larksuite/cli）
+ *   2. 安装飞书官方 lark-cli skills（npx skills add larksuite/cli）
+ *   3. 配置应用凭证（lark-cli config init --new）
+ *   4. 登录授权（lark-cli auth login --recommend）
+ *   5. 验证登录状态（lark-cli auth status）
+ *   6. 将本插件 skills 复制到 ~/.claude/skills/
+ *   7. 输出根据当前目录生成的 MCP 配置
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -17,7 +21,24 @@ const PLUGIN_DIR = import.meta.dir
 const CLAUDE_DIR = path.join(os.homedir(), '.claude')
 const SKILLS_DIR = path.join(CLAUDE_DIR, 'skills')
 
-// ─── 1. 安装官方 lark-cli skills ─────────────────────────────────────────────
+// ─── 1. 安装 lark-cli CLI ─────────────────────────────────────────────────────
+
+console.log('📦 正在安装飞书官方 lark-cli...')
+
+const cliInstall = spawnSync('npm', ['install', '-g', '@larksuite/cli'], {
+  stdio: 'inherit',
+  shell: true,
+})
+
+if (cliInstall.status === 0) {
+  console.log('✅ lark-cli 安装完成')
+} else {
+  console.warn('⚠️  lark-cli 安装失败，请手动运行：npm install -g @larksuite/cli')
+}
+
+console.log('')
+
+// ─── 2. 安装官方 lark-cli skills ─────────────────────────────────────────────
 
 console.log('📦 正在安装飞书官方 lark-cli skills...')
 
@@ -35,7 +56,59 @@ if (larkInstall.status === 0) {
 
 console.log('')
 
-// ─── 2. 安装本插件 skills ─────────────────────────────────────────────────────
+// ─── 3. 配置应用凭证 ──────────────────────────────────────────────────────────
+
+console.log('🔑 配置飞书应用凭证（lark-cli config init --new）')
+console.log('   命令会输出授权链接，请在浏览器中完成配置...')
+console.log('')
+
+const configInit = spawnSync('lark-cli', ['config', 'init', '--new'], {
+  stdio: 'inherit',
+  shell: true,
+})
+
+if (configInit.status !== 0) {
+  console.warn('⚠️  config init 未正常退出，如已在飞书开放平台完成配置可忽略')
+  console.warn('   手动运行：lark-cli config init --new')
+}
+
+console.log('')
+
+// ─── 4. 登录授权 ──────────────────────────────────────────────────────────────
+
+console.log('🔐 登录授权（lark-cli auth login --recommend）')
+console.log('   命令会输出授权链接，请在浏览器中完成授权...')
+console.log('')
+
+const authLogin = spawnSync('lark-cli', ['auth', 'login', '--recommend'], {
+  stdio: 'inherit',
+  shell: true,
+})
+
+if (authLogin.status !== 0) {
+  console.warn('⚠️  auth login 未正常退出，如已在浏览器完成授权可忽略')
+  console.warn('   手动运行：lark-cli auth login --recommend')
+}
+
+console.log('')
+
+// ─── 5. 验证登录状态 ──────────────────────────────────────────────────────────
+
+console.log('✔️  验证登录状态（lark-cli auth status）')
+console.log('')
+
+const authStatus = spawnSync('lark-cli', ['auth', 'status'], {
+  stdio: 'inherit',
+  shell: true,
+})
+
+if (authStatus.status !== 0) {
+  console.warn('⚠️  auth status 检查失败，请手动运行：lark-cli auth status')
+}
+
+console.log('')
+
+// ─── 6. 安装本插件 skills ─────────────────────────────────────────────────────
 
 const skills: Array<{ src: string; dest: string; cmd: string }> = [
   {
@@ -62,7 +135,7 @@ for (const { src, dest, cmd } of skills) {
   }
 }
 
-// ─── 3. 生成 MCP 配置 ─────────────────────────────────────────────────────────
+// ─── 7. 生成 MCP 配置 ─────────────────────────────────────────────────────────
 
 const serverPath = path.join(PLUGIN_DIR, 'server.ts').replace(/\\/g, '/')
 
@@ -85,7 +158,7 @@ try {
   }
 } catch { /* 文件不存在或解析失败，跳过 */ }
 
-// ─── 4. 输出后续步骤 ──────────────────────────────────────────────────────────
+// ─── 8. 输出后续步骤 ──────────────────────────────────────────────────────────
 
 console.log('')
 
